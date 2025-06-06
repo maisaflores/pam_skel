@@ -1,114 +1,75 @@
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
-#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <syslog.h>
 
-#define MAX_QUESTIONS 3
-#define MAX_LINE 512
-#define MAX_RESP 256
-
-typedef struct {
-    char question[MAX_LINE];
-    char answer[MAX_LINE];
-} SecurityQA;
-
-int read_questions(const char *username, SecurityQA qa_list[MAX_QUESTIONS]) {
-    char filepath[256];
-    snprintf(filepath, sizeof(filepath), "/etc/security/perguntas/%s.txt", username);
-
-    FILE *file = fopen(filepath, "r");
-    if (!file) return -1;
-
-    char line[MAX_LINE];
-    int count = 0;
-    while (fgets(line, sizeof(line), file) && count < MAX_QUESTIONS) {
-        char *sep = strchr(line, '|');
-        if (!sep) continue;
-
-        *sep = '\0';
-        strncpy(qa_list[count].question, line, MAX_LINE);
-        qa_list[count].question[MAX_LINE - 1] = '\0';
-
-        strncpy(qa_list[count].answer, sep + 1, MAX_LINE);
-        qa_list[count].answer[MAX_LINE - 1] = '\0';
-
-        // Remove o '\n' no final da resposta
-        size_t len = strlen(qa_list[count].answer);
-        if (len > 0 && qa_list[count].answer[len - 1] == '\n') {
-            qa_list[count].answer[len - 1] = '\0';
-        }
-
-        count++;
-    }
-
-    fclose(file);
-    return (count == MAX_QUESTIONS) ? 0 : -2;
-}
-
-int ask_question(pam_handle_t *pamh, const char *question, char *response) {
-    const struct pam_message msg = {
-        .msg_style = PAM_PROMPT_ECHO_ON,
-        .msg = question
-    };
-    const struct pam_message *msgp = &msg;
-    struct pam_response *resp = NULL;
-    struct pam_conv *conv;
-
-    if (pam_get_item(pamh, PAM_CONV, (const void **) &conv) != PAM_SUCCESS || !conv) {
-        return PAM_CONV_ERR;
-    }
-
-    int retval = conv->conv(1, &msgp, &resp, conv->appdata_ptr);
-    if (retval != PAM_SUCCESS || !resp || !resp->resp) {
-        return PAM_CONV_ERR;
-    }
-
-    strncpy(response, resp->resp, MAX_RESP - 1);
-    response[MAX_RESP - 1] = '\0';
-    free(resp->resp);
-    free(resp);
-
-    return PAM_SUCCESS;
-}
+#define MAX_LINE 256
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *username = NULL;
-    if (pam_get_user(pamh, &username, "Usuário: ") != PAM_SUCCESS || username == NULL) {
+    const char *username;
+    char filepath[512];
+    FILE *fp;
+    char *questions[3];
+    char *answers[3];
+    char line[MAX_LINE];
+    int count = 0;
+
+    if (pam_get_user(pamh, &username, NULL) != PAM_SUCCESS || !username) {
         pam_syslog(pamh, LOG_ERR, "Não foi possível obter o nome do usuário");
         return PAM_AUTH_ERR;
     }
 
-    if (strcmp(username, "maisa") != 0) {
-        return PAM_IGNORE;
+    snprintf(filepath, sizeof(filepath), "/etc/security/perguntas/%s.txt", username);
+    fp = fopen(filepath, "r");
+    if (!fp) {
+        pam_syslog(pamh, LOG_ERR, "Erro ao abrir arquivo de perguntas: %s", filepath);
+        return PAM_AUTH_ERR;
     }
 
-    SecurityQA qa_list[MAX_QUESTIONS];
-    if (read_questions(username, qa_list) != 0) {
-        pam_syslog(pamh, LOG_ERR, "Erro ao ler perguntas de %s", username);
+    while (fgets(line, sizeof(line), fp) && count < 3) {
+        char *sep = strchr(line, '|');
+        if (!sep) {
+            pam_syslog(pamh, LOG_ERR, "Formato inválido na linha %d", count+1);
+            fclose(fp);
+            return PAM_AUTH_ERR;
+        }
+
+        *sep = '\0';
+        questions[count] = strdup(line);
+        answers[count] = strdup(sep + 1);
+        
+        // Remove quebra de linha da resposta
+        char *newline = strchr(answers[count], '\n');
+        if (newline) *newline = '\0';
+
+        count++;
+    }
+
+    fclose(fp);
+
+    if (count < 3) {
+        pam_syslog(pamh, LOG_ERR, "Arquivo possui menos de 3 perguntas");
         return PAM_AUTH_ERR;
     }
 
     srand(time(NULL));
-    int index = rand() % MAX_QUESTIONS;
+    int selected = rand() % 3;
 
-    char user_answer[MAX_RESP];
-    if (ask_question(pamh, qa_list[index].question, user_answer) != PAM_SUCCESS) {
-        pam_syslog(pamh, LOG_ERR, "Erro ao perguntar: %s", qa_list[index].question);
+    const char *user_answer;
+    pam_prompt(pamh, PAM_PROMPT_ECHO_ON, &user_answer, "%s ", questions[selected]);
+
+    if (strcmp(user_answer, answers[selected]) != 0) {
+        pam_syslog(pamh, LOG_NOTICE, "Usuário %s errou a resposta da pergunta", username);
         return PAM_AUTH_ERR;
     }
 
-    if (strcasecmp(user_answer, qa_list[index].answer) != 0) {
-        pam_syslog(pamh, LOG_NOTICE, "Usuário %s errou a resposta", username);
-        return PAM_AUTH_ERR;
-    }
-
+    pam_syslog(pamh, LOG_INFO, "Usuário %s respondeu corretamente", username);
     return PAM_SUCCESS;
 }
 
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     return PAM_SUCCESS;
 }
-
