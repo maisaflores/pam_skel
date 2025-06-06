@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <syslog.h>
 
 #define MAX_LINE 256
 
@@ -32,7 +31,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     while (fgets(line, sizeof(line), fp) && count < 3) {
         char *sep = strchr(line, '|');
         if (!sep) {
-            pam_syslog(pamh, LOG_ERR, "Formato inválido na linha %d", count+1);
+            pam_syslog(pamh, LOG_ERR, "Formato inválido na linha %d", count + 1);
             fclose(fp);
             return PAM_AUTH_ERR;
         }
@@ -40,7 +39,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
         *sep = '\0';
         questions[count] = strdup(line);
         answers[count] = strdup(sep + 1);
-        
+
         // Remove quebra de linha da resposta
         char *newline = strchr(answers[count], '\n');
         if (newline) *newline = '\0';
@@ -58,8 +57,13 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     srand(time(NULL));
     int selected = rand() % 3;
 
-    const char *user_answer;
-    pam_prompt(pamh, PAM_PROMPT_ECHO_ON, &user_answer, "%s ", questions[selected]);
+    char *user_answer = NULL;
+    int pam_result = pam_prompt(pamh, PAM_PROMPT_ECHO_ON, &user_answer, "%s ", questions[selected]);
+
+    if (pam_result != PAM_SUCCESS || !user_answer) {
+        pam_syslog(pamh, LOG_ERR, "Erro ao obter resposta do usuário");
+        return PAM_AUTH_ERR;
+    }
 
     if (strcmp(user_answer, answers[selected]) != 0) {
         pam_syslog(pamh, LOG_NOTICE, "Usuário %s errou a resposta da pergunta", username);
