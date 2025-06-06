@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <syslog.h>
 
 #define MAX_LINE 256
 
