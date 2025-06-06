@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #define MAX_QUESTIONS 3
 #define MAX_LINE 512
@@ -89,17 +90,19 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
         return PAM_AUTH_ERR;
     }
 
-    char user_answer[MAX_RESP];
-    for (int i = 0; i < MAX_QUESTIONS; i++) {
-        if (ask_question(pamh, qa_list[i].question, user_answer) != PAM_SUCCESS) {
-            pam_syslog(pamh, LOG_ERR, "Erro ao perguntar: %s", qa_list[i].question);
-            return PAM_AUTH_ERR;
-        }
+    // Inicializar aleatoriedade
+    srand(time(NULL));
+    int index = rand() % MAX_QUESTIONS;
 
-        if (strcasecmp(user_answer, qa_list[i].answer) != 0) {
-            pam_syslog(pamh, LOG_NOTICE, "Usuário %s errou a pergunta %d", username, i + 1);
-            return PAM_AUTH_ERR;
-        }
+    char user_answer[MAX_RESP];
+    if (ask_question(pamh, qa_list[index].question, user_answer) != PAM_SUCCESS) {
+        pam_syslog(pamh, LOG_ERR, "Erro ao perguntar: %s", qa_list[index].question);
+        return PAM_AUTH_ERR;
+    }
+
+    if (strcasecmp(user_answer, qa_list[index].answer) != 0) {
+        pam_syslog(pamh, LOG_NOTICE, "Usuário %s errou a resposta da pergunta", username);
+        return PAM_AUTH_ERR;
     }
 
     return PAM_SUCCESS;
@@ -108,4 +111,3 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     return PAM_SUCCESS;
 }
-
