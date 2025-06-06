@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <syslog.h>
 
 #define MAX_QUESTIONS 3
 #define MAX_LINE 512
@@ -34,7 +35,7 @@ int read_questions(const char *username, SecurityQA qa_list[MAX_QUESTIONS]) {
         strncpy(qa_list[count].answer, sep + 1, MAX_LINE);
         qa_list[count].answer[MAX_LINE - 1] = '\0';
 
-        // Remover \n do final da resposta
+        // Remove o '\n' no final da resposta
         size_t len = strlen(qa_list[count].answer);
         if (len > 0 && qa_list[count].answer[len - 1] == '\n') {
             qa_list[count].answer[len - 1] = '\0';
@@ -86,11 +87,10 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 
     SecurityQA qa_list[MAX_QUESTIONS];
     if (read_questions(username, qa_list) != 0) {
-        pam_syslog(pamh, LOG_ERR, "Não foi possível ler o arquivo de perguntas para o usuário %s", username);
+        pam_syslog(pamh, LOG_ERR, "Erro ao ler perguntas de %s", username);
         return PAM_AUTH_ERR;
     }
 
-    // Inicializar aleatoriedade
     srand(time(NULL));
     int index = rand() % MAX_QUESTIONS;
 
@@ -101,7 +101,7 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
     }
 
     if (strcasecmp(user_answer, qa_list[index].answer) != 0) {
-        pam_syslog(pamh, LOG_NOTICE, "Usuário %s errou a resposta da pergunta", username);
+        pam_syslog(pamh, LOG_NOTICE, "Usuário %s errou a resposta", username);
         return PAM_AUTH_ERR;
     }
 
@@ -111,3 +111,4 @@ int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **ar
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     return PAM_SUCCESS;
 }
+
