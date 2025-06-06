@@ -1,84 +1,65 @@
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <unistd.h>
+#include <stdio.h>
 
-#define CODE_LEN 5  // 4 digits + '\0'
-#define EMAIL_FILE "/etc/pam_skel_emails"
+#define MAX_RESP 256
 
-// Função para gerar código aleatório de 4 dígitos
-void generate_code(char *code) {
-    srand(time(NULL) ^ getpid());
-    snprintf(code, CODE_LEN, "%04d", rand() % 10000);
-}
+// Respostas esperadas (pode ser adaptado para ler de um arquivo futuramente)
+const char *expected_answers[3] = {
+    "azul",    // Exemplo: "Qual sua cor favorita?"
+    "fluffy",  // Exemplo: "Nome do seu primeiro animal de estimação?"
+    "sao paulo"// Exemplo: "Cidade onde você nasceu?"
+};
 
-// Função para obter email do usuário a partir de um arquivo
-int get_user_email(const char *user, char *email, size_t len) {
-    FILE *fp = fopen(EMAIL_FILE, "r");
-    if (!fp) return -1;
+const char *questions[3] = {
+    "Qual sua cor favorita?",
+    "Qual o nome do seu primeiro animal de estimação?",
+    "Em que cidade você nasceu?"
+};
 
-    char line[256];
-    while (fgets(line, sizeof(line), fp)) {
-        char file_user[64], file_email[128];
-        if (sscanf(line, "%63[^:]:%127s", file_user, file_email) == 2) {
-            if (strcmp(user, file_user) == 0) {
-                strncpy(email, file_email, len);
-                fclose(fp);
-                return 0;
-            }
-        }
+int ask_question(pam_handle_t *pamh, const char *question, char *response) {
+    const struct pam_message msg = {
+        .msg_style = PAM_PROMPT_ECHO_ON,
+        .msg = question
+    };
+    const struct pam_message *msgp = &msg;
+    struct pam_response *resp = NULL;
+    struct pam_conv *conv;
+
+    if (pam_get_item(pamh, PAM_CONV, (const void **) &conv) != PAM_SUCCESS || !conv) {
+        return PAM_CONV_ERR;
     }
-    fclose(fp);
-    return -1;
-}
 
-// Função para enviar o email com o código
-void send_email(const char *email, const char *code) {
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-        "echo 'Seu código de autenticação: %s' | mail -s 'Código 2FA' %s",
-        code, email);
-    system(cmd);
+    int retval = conv->conv(1, &msgp, &resp, conv->appdata_ptr);
+    if (retval != PAM_SUCCESS || !resp || !resp->resp) {
+        return PAM_CONV_ERR;
+    }
+
+    strncpy(response, resp->resp, MAX_RESP - 1);
+    response[MAX_RESP - 1] = '\0';
+    free(resp->resp);
+    free(resp);
+
+    return PAM_SUCCESS;
 }
 
 int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *user;
-    char code[CODE_LEN];
-    char input_code[CODE_LEN];
-    char email[128];
+    char user_answer[MAX_RESP];
 
-    // Obtém o nome do usuário
-    if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS) {
-        return PAM_AUTH_ERR;
+    for (int i = 0; i < 3; i++) {
+        if (ask_question(pamh, questions[i], user_answer) != PAM_SUCCESS) {
+            pam_syslog(pamh, LOG_ERR, "Erro ao fazer pergunta %d", i + 1);
+            return PAM_AUTH_ERR;
+        }
+
+        if (strcasecmp(user_answer, expected_answers[i]) != 0) {
+            pam_syslog(pamh, LOG_NOTICE, "Resposta incorreta para a pergunta %d", i + 1);
+            return PAM_AUTH_ERR;
+        }
     }
 
-    // Obtém email do usuário
-    if (get_user_email(user, email, sizeof(email)) != 0) {
-        return PAM_AUTH_ERR;
-    }
-
-    // Gera e envia o código
-    generate_code(code);
-    send_email(email, code);
-
-    // Solicita código ao usuário
-    printf("Digite o código de autenticação enviado para %s: ", email);
-    if (fgets(input_code, sizeof(input_code), stdin) == NULL) {
-        return PAM_AUTH_ERR;
-    }
-
-    // Remove \n
-    input_code[strcspn(input_code, "\n")] = '\0';
-
-    // Verifica se o código está correto
-    if (strcmp(code, input_code) == 0) {
-        return PAM_SUCCESS;
-    } else {
-        return PAM_AUTH_ERR;
-    }
+    return PAM_SUCCESS;
 }
 
 int pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv) {
